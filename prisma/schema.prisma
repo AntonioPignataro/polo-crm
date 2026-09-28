@@ -1,0 +1,621 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================
+// AUTH & MULTI-TENANCY
+// ============================================
+
+enum UserRole {
+  SUPER_ADMIN
+  DIRETOR
+  PRECEPTOR
+  MONITOR
+  USUARIO
+}
+
+model Club {
+  id                  String   @id @default(cuid())
+  name                String
+  slug                String   @unique
+  logoUrl             String?  @map("logo_url")
+  settings            Json?    @default("{}")
+  isActive            Boolean  @default(true) @map("is_active")
+  notificationsPaused Boolean  @default(false) @map("notifications_paused")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  users                      User[]
+  members                    Member[]
+  books                      Book[]
+  activities                 Activity[]
+  parentFormations           ParentFormation[]
+  calendarEvents             CalendarEvent[]
+  attendanceSessions         AttendanceSession[]
+  polarConfigs               PolarConfig[]
+  notifications              Notification[]
+  calendarNotificationQueue  CalendarNotificationQueue[]
+  reportFiles                ReportFile[]
+
+  @@map("clubs")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  clubId       String   @map("club_id")
+  email        String
+  passwordHash String   @map("password_hash")
+  name         String
+  role         UserRole
+  phone        String?
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  /// Set when a DIRETOR issues a temporary password. Forces a change on the
+  /// next dashboard load so the director never keeps knowing a live password.
+  mustChangePassword Boolean @default(false) @map("must_change_password")
+
+  club                  Club                @relation(fields: [clubId], references: [id])
+  parent                Parent?
+  preceptoredMembers    Member[]            @relation("PreceptorMembers")
+  polarEntriesCreated   PolarEntry[]        @relation("PolarEntryCreator")
+  bookLoansRegistered   BookLoan[]          @relation("BookLoanRegistrar")
+  appointmentsConducted Appointment[]       @relation("AppointmentConductor")
+  studyHoursRegistered  StudyHour[]         @relation("StudyHourRegistrar")
+  sessionsCreated       AttendanceSession[] @relation("SessionCreator")
+  activitiesCreated     Activity[]          @relation("ActivityCreator")
+  registrationsCreated  ActivityRegistration[] @relation("RegistrationCreator")
+  activityRegistrations ActivityRegistration[] @relation("UserRegistration")
+  calendarEventsCreated CalendarEvent[]     @relation("CalendarEventCreator")
+  notifications         Notification[]      @relation("NotificationRecipient")
+  passwordResetTokens   PasswordResetToken[]
+
+  @@unique([clubId, email])
+  @@map("users")
+}
+
+/// Single-use tokens for the "esqueci minha senha" flow.
+/// Only the SHA-256 of the token is stored — a leak of this table cannot be
+/// used to take over accounts.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ============================================
+// MEMBERS (SOCIOS) & PARENTS
+// ============================================
+
+enum GroupType {
+  G1
+  G2
+  G3
+}
+
+enum ModuleType {
+  QUINTA
+  SEXTA
+  SABADO
+}
+
+enum MemberStatus {
+  ATIVO
+  INATIVO
+}
+
+model Member {
+  id                String       @id @default(cuid())
+  clubId            String       @map("club_id")
+  code              Int          @default(autoincrement())
+  fullName          String       @map("full_name")
+  birthDate         DateTime     @map("birth_date") @db.Date
+  address           String?
+  groupType         GroupType    @map("group_type")
+  status            MemberStatus @default(ATIVO)
+  // Date the member became INATIVO (null while active). With enrollmentDate this
+  // bounds the membership interval [enrollmentDate, inactivatedAt) so reports can
+  // reflect who was an active member DURING a selected period, not just right now.
+  inactivatedAt     DateTime?    @map("inactivated_at") @db.Date
+  enrollmentDate    DateTime?    @map("enrollment_date") @db.Date
+  enrollmentFormUrl String?      @map("enrollment_form_url")
+  polaresUntil      DateTime?    @map("polares_until") @db.Date
+  preceptorId       String?      @map("preceptor_id")
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
+
+  club                   Club                   @relation(fields: [clubId], references: [id])
+  preceptor              User?                  @relation("PreceptorMembers", fields: [preceptorId], references: [id])
+  modules                MemberModule[]
+  parents                MemberParent[]
+  polarEntries           PolarEntry[]
+  attendanceRecords      AttendanceRecord[]
+  bookLoans              BookLoan[]
+  appointments           Appointment[]
+  studyHours             StudyHour[]
+  activityRegistrations  ActivityRegistration[]
+  priestQueue            PriestQueue[]
+
+  @@unique([clubId, code])
+  @@map("members")
+}
+
+model MemberModule {
+  id         String     @id @default(cuid())
+  memberId   String     @map("member_id")
+  moduleType ModuleType @map("module_type")
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, moduleType])
+  @@map("member_modules")
+}
+
+enum ParentRelationship {
+  PAI
+  MAE
+  RESPONSAVEL
+}
+
+enum Sex {
+  MASCULINO
+  FEMININO
+}
+
+model Parent {
+  id           String             @id @default(cuid())
+  userId       String?            @unique @map("user_id")
+  fullName     String             @map("full_name")
+  profession   String?
+  phone        String?
+  email        String?
+  cpf          String?
+  relationship ParentRelationship
+  sex          Sex?
+  createdAt    DateTime           @default(now()) @map("created_at")
+
+  user                      User?                      @relation(fields: [userId], references: [id])
+  memberParents             MemberParent[]
+  parentFormationAttendance ParentFormationAttendance[]
+  activityRegistrations     ActivityRegistration[]
+
+  @@map("parents")
+}
+
+model MemberParent {
+  id       String @id @default(cuid())
+  memberId String @map("member_id")
+  parentId String @map("parent_id")
+
+  member Member @relation(fields: [memberId], references: [id])
+  parent Parent @relation(fields: [parentId], references: [id])
+
+  @@unique([memberId, parentId])
+  @@map("member_parents")
+}
+
+// ============================================
+// POLARES (POINTS SYSTEM)
+// ============================================
+
+enum PolarCategory {
+  PRESENCA
+  PONTUALIDADE
+  AMIGO
+  ESPORTE
+  ENCARGO
+  MULTA
+  EXERCICIO
+  BOLETIM
+  RESUMO
+  OUTROS_PONTOS
+  LIVRO
+}
+
+model PolarEntry {
+  id           String        @id @default(cuid())
+  memberId     String        @map("member_id")
+  date         DateTime      @db.Date
+  category     PolarCategory
+  points       Int
+  description  String?
+  registeredBy String        @map("registered_by")
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  member     Member @relation(fields: [memberId], references: [id])
+  registerer User   @relation("PolarEntryCreator", fields: [registeredBy], references: [id])
+
+  @@map("polar_entries")
+}
+
+model PolarConfig {
+  id            String        @id @default(cuid())
+  clubId        String        @map("club_id")
+  category      PolarCategory
+  defaultPoints Int           @map("default_points")
+  description   String?
+
+  club Club @relation(fields: [clubId], references: [id])
+
+  @@unique([clubId, category])
+  @@map("polar_configs")
+}
+
+// ============================================
+// ATTENDANCE (PRESENCA)
+// ============================================
+
+model AttendanceSession {
+  id        String     @id @default(cuid())
+  clubId    String     @map("club_id")
+  date      DateTime   @db.Date
+  dayType   ModuleType @map("day_type")
+  notes     String?
+  createdBy String     @map("created_by")
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  club              Club               @relation(fields: [clubId], references: [id])
+  creator           User               @relation("SessionCreator", fields: [createdBy], references: [id])
+  attendanceRecords AttendanceRecord[]
+  priestQueue       PriestQueue[]
+
+  @@unique([clubId, date, dayType])
+  @@map("attendance_sessions")
+}
+
+model AttendanceRecord {
+  id        String  @id @default(cuid())
+  sessionId String  @map("session_id")
+  memberId  String  @map("member_id")
+  present   Boolean @default(false)
+  onTime    Boolean @default(false) @map("on_time")
+
+  session AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  member  Member            @relation(fields: [memberId], references: [id])
+
+  @@unique([sessionId, memberId])
+  @@map("attendance_records")
+}
+
+// ============================================
+// LIBRARY (BIBLIOTECA)
+// ============================================
+
+enum BookStatus {
+  DISPONIVEL
+  EMPRESTADO
+}
+
+enum BookCategory {
+  LITERATURA
+  LEITURA_ESPIRITUAL
+  FORMACAO_HUMANA
+}
+
+model Book {
+  id            String        @id @default(cuid())
+  clubId        String        @map("club_id")
+  code          Int           @default(autoincrement())
+  title         String
+  subtitle      String?
+  author        String?
+  isbn          String?
+  publisher     String?
+  category      String?
+  bookCategory  BookCategory? @map("book_category")
+  synopsis      String?
+  publishedDate String?       @map("published_date")
+  pageCount     Int?          @map("page_count")
+  language      String?
+  coverUrl      String?       @map("cover_url")
+  status         BookStatus    @default(DISPONIVEL)
+  archivedAt     DateTime?     @map("archived_at")
+  recommendations GroupType[]  @default([])
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  club  Club       @relation(fields: [clubId], references: [id])
+  loans BookLoan[]
+
+  @@unique([clubId, code])
+  @@index([clubId, isbn])
+  @@map("books")
+}
+
+model BookLoan {
+  id           String    @id @default(cuid())
+  bookId       String    @map("book_id")
+  memberId     String    @map("member_id")
+  checkoutDate DateTime  @map("checkout_date") @db.Date
+  dueDate      DateTime? @map("due_date") @db.Date
+  returnDate   DateTime? @map("return_date") @db.Date
+  finished     Boolean   @default(false)
+  registeredBy String    @map("registered_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  book      Book   @relation(fields: [bookId], references: [id])
+  member    Member @relation(fields: [memberId], references: [id])
+  registrar User   @relation("BookLoanRegistrar", fields: [registeredBy], references: [id])
+
+  @@map("book_loans")
+}
+
+// ============================================
+// APPOINTMENTS (ATENDIMENTOS)
+// ============================================
+
+enum AppointmentType {
+  SACERDOTE
+  PRECEPTORIA_SOCIO
+  PRECEPTORIA_PAIS
+}
+
+model Appointment {
+  id          String          @id @default(cuid())
+  memberId    String          @map("member_id")
+  date        DateTime        @db.Date
+  type        AppointmentType
+  notes       String?
+  purposes    String?
+  lifePlan    String?         @map("life_plan")
+  conductedBy String          @map("conducted_by")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @default(now()) @updatedAt @map("updated_at")
+
+  member    Member @relation(fields: [memberId], references: [id])
+  conductor User   @relation("AppointmentConductor", fields: [conductedBy], references: [id])
+
+  @@map("appointments")
+}
+
+model PriestQueue {
+  id        String  @id @default(cuid())
+  sessionId String  @map("session_id")
+  memberId  String  @map("member_id")
+  position  Int
+  attended  Boolean @default(false)
+
+  session AttendanceSession @relation(fields: [sessionId], references: [id])
+  member  Member            @relation(fields: [memberId], references: [id])
+
+  @@unique([sessionId, memberId])
+  @@map("priest_queue")
+}
+
+// ============================================
+// ACTIVITIES (ATIVIDADES)
+// ============================================
+
+enum ActivityStatus {
+  PLANEJADA
+  INSCRICOES_ABERTAS
+  INSCRICOES_ENCERRADAS
+  CONCLUIDA
+  CANCELADA
+}
+
+model Activity {
+  id                String         @id @default(cuid())
+  clubId            String         @map("club_id")
+  name              String
+  description       String?
+  startDate         DateTime?      @map("start_date")
+  endDate           DateTime?      @map("end_date")
+  attachmentUrl     String?        @map("attachment_url")
+  registrationOpen  DateTime?      @map("registration_open")
+  registrationClose DateTime?      @map("registration_close")
+  costPerPerson     Decimal?       @map("cost_per_person") @db.Decimal(10, 2)
+  status            ActivityStatus @default(PLANEJADA)
+  createdBy         String         @map("created_by")
+  createdAt         DateTime       @default(now()) @map("created_at")
+
+  club           Club                   @relation(fields: [clubId], references: [id])
+  creator        User                   @relation("ActivityCreator", fields: [createdBy], references: [id])
+  registrations  ActivityRegistration[]
+
+  @@map("activities")
+}
+
+model ActivityRegistration {
+  id                   String    @id @default(cuid())
+  activityId           String    @map("activity_id")
+  memberId             String?   @map("member_id")
+  parentId             String?   @map("parent_id")
+  userId               String?   @map("user_id")
+  participantName      String    @map("participant_name")
+  participantCpf       String?   @map("participant_cpf")
+  participantBirthDate DateTime? @map("participant_birth_date") @db.Date
+  isExternal           Boolean   @default(false) @map("is_external")
+  canGiveRide          Boolean   @default(false) @map("can_give_ride")
+  needsRide            Boolean   @default(false) @map("needs_ride")
+  registeredBy         String    @map("registered_by")
+  createdAt            DateTime  @default(now()) @map("created_at")
+
+  activity  Activity @relation(fields: [activityId], references: [id])
+  member    Member?  @relation(fields: [memberId], references: [id])
+  parent    Parent?  @relation(fields: [parentId], references: [id])
+  user      User?    @relation("UserRegistration", fields: [userId], references: [id])
+  registrar User     @relation("RegistrationCreator", fields: [registeredBy], references: [id])
+
+  @@map("activity_registrations")
+}
+
+// ============================================
+// PARENT FORMATIONS (FORMACAO PAIS)
+// ============================================
+
+enum FormationType {
+  FORMACAO_PAI
+  FORMACAO_CASAL
+}
+
+model ParentFormation {
+  id          String        @id @default(cuid())
+  clubId      String        @map("club_id")
+  name        String
+  type        FormationType
+  description String?
+  date        DateTime
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  club       Club                        @relation(fields: [clubId], references: [id])
+  attendance ParentFormationAttendance[]
+
+  @@map("parent_formations")
+}
+
+model ParentFormationAttendance {
+  id          String  @id @default(cuid())
+  formationId String  @map("formation_id")
+  parentId    String  @map("parent_id")
+  /// Parent self-RSVP. Doesn't count as actual attendance.
+  confirmed   Boolean @default(false)
+  /// Monitor-verified attendance. Only this counts for reports + alerts.
+  present     Boolean @default(false)
+
+  formation ParentFormation @relation(fields: [formationId], references: [id], onDelete: Cascade)
+  parent    Parent          @relation(fields: [parentId], references: [id])
+
+  @@unique([formationId, parentId])
+  @@map("parent_formation_attendance")
+}
+
+// ============================================
+// STUDY HOURS (HORAS DE ESTUDO)
+// ============================================
+
+model StudyHour {
+  id           String   @id @default(cuid())
+  memberId     String   @map("member_id")
+  weekStart    DateTime @map("week_start") @db.Date
+  hours        Decimal  @db.Decimal(5, 1)
+  registeredBy String   @map("registered_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  member     Member @relation(fields: [memberId], references: [id])
+  registrar  User   @relation("StudyHourRegistrar", fields: [registeredBy], references: [id])
+
+  @@unique([memberId, weekStart])
+  @@map("study_hours")
+}
+
+// ============================================
+// CALENDAR (CALENDARIO)
+// ============================================
+
+enum CalendarEventType {
+  CLUBE_REGULAR
+  ATIVIDADE_EXTERNA
+  FORMACAO_PAIS
+  SEM_ATIVIDADE
+  OUTROS
+}
+
+model CalendarEvent {
+  id          String            @id @default(cuid())
+  clubId      String            @map("club_id")
+  semester    String
+  title       String
+  description String?
+  date        DateTime          @db.Date
+  startTime   String?           @map("start_time")
+  endTime     String?           @map("end_time")
+  eventType   CalendarEventType @map("event_type")
+  createdBy   String            @map("created_by")
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  club     Club @relation(fields: [clubId], references: [id])
+  creator  User @relation("CalendarEventCreator", fields: [createdBy], references: [id])
+
+  @@map("calendar_events")
+}
+
+// ============================================
+// NOTIFICATIONS (NOTIFICACOES)
+// ============================================
+
+enum NotificationType {
+  ALERTA_PRESENCA
+  ALERTA_PRECEPTORIA
+  ALERTA_FORMACAO_PAIS
+  LEMBRETE_ATIVIDADE
+  GERAL
+  ANIVERSARIO
+  ALTERACAO_CALENDARIO
+}
+
+enum CalendarChangeType {
+  CREATED
+  UPDATED
+  DELETED
+}
+
+model CalendarNotificationQueue {
+  id         String             @id @default(cuid())
+  clubId     String             @map("club_id")
+  eventTitle String             @map("event_title")
+  eventDate  DateTime           @map("event_date") @db.Date
+  changeType CalendarChangeType @map("change_type")
+  createdAt  DateTime           @default(now()) @map("created_at")
+
+  club Club @relation(fields: [clubId], references: [id])
+
+  @@map("calendar_notification_queue")
+}
+
+model Notification {
+  id          String           @id @default(cuid())
+  clubId      String           @map("club_id")
+  recipientId String           @map("recipient_id")
+  type        NotificationType
+  title       String
+  message     String
+  channel     String           @default("EMAIL")
+  sentAt      DateTime?        @map("sent_at")
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  club      Club @relation(fields: [clubId], references: [id])
+  recipient User @relation("NotificationRecipient", fields: [recipientId], references: [id])
+
+  @@map("notifications")
+}
+
+// ============================================
+// DOCUMENTS / FILES (Relatórios screen uploads + parent "Documentos")
+// ============================================
+
+enum FileVisibility {
+  MONITOR // visible to MONITOR and above
+  ALL     // visible to everyone, including parents (USUARIO)
+}
+
+model ReportFile {
+  id           String         @id @default(cuid())
+  clubId       String         @map("club_id")
+  name         String
+  storagePath  String         @unique @map("storage_path")
+  mimeType     String?        @map("mime_type")
+  sizeBytes    Int?           @map("size_bytes")
+  visibility   FileVisibility @default(MONITOR)
+  uploadedBy   String         @map("uploaded_by") // User id (audit/display only)
+  uploaderName String?        @map("uploader_name")
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([clubId])
+  @@map("report_files")
+}

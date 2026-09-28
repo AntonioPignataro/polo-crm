@@ -1,0 +1,24 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/keep-alive",
+      "schedule": "0 8 */5 * *"
+    },
+    {
+      "path": "/api/cron/birthday-notifications",
+      "schedule": "0 15 * * 1"
+    },
+    {
+      "path": "/api/cron/calendar-notifications",
+      "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/cron/alert-notifications",
+      "schedule": "0 21 28-31 * *"
+    },
+    {
+      "path": "/api/cron/reset-polares",
+      "schedule": "0 12 31 12 *"
+    }
+  ]
+}
