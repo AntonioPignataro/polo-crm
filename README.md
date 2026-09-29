@@ -55,7 +55,7 @@ I was the only developer, working directly with the client from the first requir
 
 - **Context engineering** — [`CLAUDE.md`](CLAUDE.md) is the project's source of truth: domain rules, architecture decisions and a session-by-session development log that every agent session starts from.
 - **Orchestration** — subagents working in parallel on independent tasks, with MCP servers and Agent Skills integrated into the workflow.
-- **My role** — gathering requirements with the client, making the architecture decisions and validating every delivery: testing each feature by hand, with additional checks run by the agents.
+- **My role** — gathering requirements with the client, making the architecture decisions and validating every delivery.
 
 ## Running locally
 
